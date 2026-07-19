@@ -4,7 +4,10 @@ import torch.nn.functional as F
 from scipy.io import loadmat
 import os
 import cv2
-from mtcnn import MTCNN
+try:
+    from mtcnn import MTCNN
+except ImportError:
+    MTCNN = None
 from util.preprocess import load_lm3d, align_img
 from .facelandmark.large_model_infer import LargeModelInfer
 

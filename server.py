@@ -80,7 +80,7 @@ async def process(
     image_bgr = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
 
     faces = []
-    for i, (trans_params, im_tensor) in enumerate(detections):
+    for i, (trans_params, im_tensor, rfm_lmks) in enumerate(detections):
         _model.input_img = im_tensor.to(_args.device)
         results = _model.forward()
 
@@ -96,12 +96,16 @@ async def process(
             if arr is not None:
                 landmarks[key] = arr[0].astype(float).tolist() if arr.ndim == 3 else arr.astype(float).tolist()
 
+        # retinaface 106 landmarks from the detector (direct regression, not 3DMM)
+        detector_ldm106 = rfm_lmks.tolist() if rfm_lmks is not None else None
+
         verts = results.get("face_shape")
         vertices = verts[0].astype(float).tolist() if verts is not None and verts.ndim == 3 else None
 
         faces.append({
             "index": i,
             "landmarks": landmarks,
+            "detector_ldm106": detector_ldm106,
             "mesh_vertices": vertices,
             "mesh_vertex_count": len(vertices) if vertices else 0,
             "files": {

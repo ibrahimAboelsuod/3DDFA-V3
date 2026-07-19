@@ -58,18 +58,21 @@ class retinaface:
                 exit()
 
     def detect_all(self, im):
-        """Return list of (trans_params, im_tensor) for every detected face."""
+        """Return list of (trans_params, im_tensor, rfm_lmks) for every detected face.
+        rfm_lmks: (106, 2) retinaface landmarks in original image coords, or None."""
         img = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
         H = img.shape[0]
         _, results_all = self.landmark_model.infer(img)
         faces = []
         for results in results_all:
+            # retinaface 106 landmarks in image coords (y=0 at top)
+            rfm_lmks = results.astype(np.float32).copy()
             landmarks = []
             for idx in [74, 83, 54, 84, 90]:
                 landmarks.append([results[idx][0], results[idx][1]])
             landmarks = np.array(landmarks).astype(np.float32)
             trans_params, im_tensor = self._crop_face(im, landmarks, H)
-            faces.append((trans_params, im_tensor))
+            faces.append((trans_params, im_tensor, rfm_lmks))
         return faces
 
 class mtcnnface:
@@ -116,7 +119,7 @@ class mtcnnface:
                 exit()
 
     def detect_all(self, im):
-        """Return list of (trans_params, im_tensor) for every detected face."""
+        """Return list of (trans_params, im_tensor, rfm_lmks) for every detected face."""
         img = np.asarray(im)
         H = img.shape[0]
         facial_landmarks = self.landmark_model.detect_faces(img)
@@ -130,7 +133,7 @@ class mtcnnface:
             landmarks = np.array(landmarks).astype(np.float32)
             trans_params, im, lm, _ = align_img(im, landmarks, self.lm3d_std)
             im_tensor = torch.tensor(np.array(im)/255., dtype=torch.float32).permute(2, 0, 1).unsqueeze(0)
-            faces.append((trans_params, im_tensor))
+            faces.append((trans_params, im_tensor, None))
         return faces
 
 class face_box:
@@ -152,4 +155,4 @@ class face_box:
         else:
             print('run original image in (224,224,3) size')
             self.detector = no_crop
-            self.detect_all = lambda im: [no_crop(im)]
+            self.detect_all = lambda im: [(*no_crop(im), None)]

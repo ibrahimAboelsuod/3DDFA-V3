@@ -1,0 +1,117 @@
+"""3DDFA-V3 HTTP API. POST /process with an image, get landmarks + mesh back."""
+import io
+import uuid
+import zipfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+
+from face_box import face_box
+from model.recon import face_model
+from util.io import visualize
+
+OUTPUT_ROOT = Path("/tmp/3ddfa-results")
+OUTPUT_ROOT.mkdir(exist_ok=True)
+
+class _Args:
+    device = "cuda"
+    backbone = "resnet50"
+    iscrop = True
+    detector = "retinaface"
+    ldm68 = True
+    ldm106 = True
+    ldm106_2d = True
+    ldm134 = True
+    seg = True
+    seg_visible = True
+    useTex = True
+    extractTex = True
+
+print("Loading 3DDFA-V3 (10-15s)...")
+_args = _Args()
+_model = face_model(_args)
+_detector = face_box(_args).detector
+print("Model ready.")
+
+app = FastAPI(title="3DDFA-V3")
+
+
+@app.post("/process")
+async def process(file: UploadFile = File(...)):
+    contents = await file.read()
+    im = Image.open(io.BytesIO(contents)).convert("RGB")
+
+    trans_params, im_tensor = _detector(im)
+    _model.input_img = im_tensor.to(_args.device)
+    results = _model.forward()
+
+    job_id = str(uuid.uuid4())[:8]
+    job_dir = OUTPUT_ROOT / job_id
+    job_dir.mkdir(parents=True)
+
+    image_bgr = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+    viz = visualize(results, _args)
+    viz.visualize_and_output(trans_params, image_bgr, str(job_dir), "result")
+
+    landmarks = {}
+    for key in ("ldm68", "ldm106", "ldm106_2d", "ldm134"):
+        arr = results.get(key)
+        if arr is not None:
+            landmarks[key] = arr[0].astype(float).tolist() if arr.ndim == 3 else arr.astype(float).tolist()
+
+    verts = results.get("face_shape")
+    vertices = verts[0].astype(float).tolist() if verts is not None and verts.ndim == 3 else None
+
+    return JSONResponse({
+        "job_id": job_id,
+        "landmarks": landmarks,
+        "mesh_vertices": vertices,
+        "mesh_vertex_count": len(vertices) if vertices else 0,
+        "files": {
+            "visualization": f"/result/{job_id}/visualization",
+            "obj_pca_tex":    f"/result/{job_id}/obj_pca",
+            "obj_extract_tex": f"/result/{job_id}/obj_extract",
+            "npy":            f"/result/{job_id}/npy",
+            "zip":            f"/result/{job_id}/zip",
+        },
+    })
+
+
+@app.get("/result/{job_id}/visualization")
+async def get_vis(job_id: str):
+    p = OUTPUT_ROOT / job_id / "result.png"
+    return FileResponse(p, media_type="image/png") if p.exists() else JSONResponse({"error": "not found"}, 404)
+
+
+@app.get("/result/{job_id}/{kind}")
+async def get_file(job_id: str, kind: str):
+    mapping = {
+        "obj_pca": "result_pcaTex.obj",
+        "obj_extract": "result_extractTex.obj",
+        "npy": "result.npy",
+    }
+    p = OUTPUT_ROOT / job_id / mapping.get(kind, "")
+    return FileResponse(p, media_type="application/octet-stream") if p.exists() else JSONResponse({"error": "not found"}, 404)
+
+
+@app.get("/result/{job_id}/zip")
+async def get_zip(job_id: str):
+    d = OUTPUT_ROOT / job_id
+    if not d.exists():
+        return JSONResponse({"error": "not found"}, 404)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in d.iterdir():
+            zf.write(f, f.name)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip",
+                             headers={"Content-Disposition": f"attachment; filename={job_id}.zip"})
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}

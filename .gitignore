@@ -1,0 +1,6 @@
+assets/
+data/
+results/
+__pycache__/
+*.pyc
+nvdiffrast/

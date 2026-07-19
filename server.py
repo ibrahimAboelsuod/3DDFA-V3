@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from face_box import face_box
@@ -38,6 +39,13 @@ _detector = face_box(_args).detector
 print("Model ready.")
 
 app = FastAPI(title="3DDFA-V3")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 _LANDMARK_SETS = {

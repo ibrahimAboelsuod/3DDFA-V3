@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from face_box import face_box
@@ -40,8 +40,24 @@ print("Model ready.")
 app = FastAPI(title="3DDFA-V3")
 
 
+_LANDMARK_SETS = {
+    "68":      ["ldm68"],
+    "106+134": ["ldm106", "ldm134"],
+    "106_2d":  ["ldm106_2d"],
+}
+
 @app.post("/process")
-async def process(file: UploadFile = File(...)):
+async def process(
+    file: UploadFile = File(...),
+    landmark_type: str = Form("106+134"),
+):
+    keys = _LANDMARK_SETS.get(landmark_type)
+    if keys is None:
+        return JSONResponse(
+            {"error": f"Unknown landmark_type '{landmark_type}'. Choose: {list(_LANDMARK_SETS)}"},
+            status_code=400,
+        )
+
     contents = await file.read()
     im = Image.open(io.BytesIO(contents)).convert("RGB")
 
@@ -58,7 +74,7 @@ async def process(file: UploadFile = File(...)):
     viz.visualize_and_output(trans_params, image_bgr, str(job_dir), "result")
 
     landmarks = {}
-    for key in ("ldm68", "ldm106", "ldm106_2d", "ldm134"):
+    for key in keys:
         arr = results.get(key)
         if arr is not None:
             landmarks[key] = arr[0].astype(float).tolist() if arr.ndim == 3 else arr.astype(float).tolist()

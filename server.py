@@ -34,8 +34,8 @@ class _Args:
 
 print("Loading 3DDFA-V3 (10-15s)...")
 _args = _Args()
+_facebox = face_box(_args)
 _model = face_model(_args)
-_detector = face_box(_args).detector
 print("Model ready.")
 
 app = FastAPI(title="3DDFA-V3")
@@ -69,45 +69,62 @@ async def process(
     contents = await file.read()
     im = Image.open(io.BytesIO(contents)).convert("RGB")
 
-    trans_params, im_tensor = _detector(im)
-    _model.input_img = im_tensor.to(_args.device)
-    results = _model.forward()
+    detections = _facebox.detect_all(im)
+    if not detections:
+        return JSONResponse({"error": "no face detected"}, status_code=422)
 
     job_id = str(uuid.uuid4())[:8]
     job_dir = OUTPUT_ROOT / job_id
     job_dir.mkdir(parents=True)
 
     image_bgr = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
-    viz = visualize(results, _args)
-    viz.visualize_and_output(trans_params, image_bgr, str(job_dir), "result")
 
-    landmarks = {}
-    for key in keys:
-        arr = results.get(key)
-        if arr is not None:
-            landmarks[key] = arr[0].astype(float).tolist() if arr.ndim == 3 else arr.astype(float).tolist()
+    faces = []
+    for i, (trans_params, im_tensor) in enumerate(detections):
+        _model.input_img = im_tensor.to(_args.device)
+        results = _model.forward()
 
-    verts = results.get("face_shape")
-    vertices = verts[0].astype(float).tolist() if verts is not None and verts.ndim == 3 else None
+        face_dir = job_dir / f"face_{i}"
+        face_dir.mkdir(parents=True)
+
+        viz = visualize(results, _args)
+        viz.visualize_and_output(trans_params, image_bgr, str(face_dir), "result")
+
+        landmarks = {}
+        for key in keys:
+            arr = results.get(key)
+            if arr is not None:
+                landmarks[key] = arr[0].astype(float).tolist() if arr.ndim == 3 else arr.astype(float).tolist()
+
+        verts = results.get("face_shape")
+        vertices = verts[0].astype(float).tolist() if verts is not None and verts.ndim == 3 else None
+
+        faces.append({
+            "index": i,
+            "landmarks": landmarks,
+            "mesh_vertices": vertices,
+            "mesh_vertex_count": len(vertices) if vertices else 0,
+            "files": {
+                "visualization": f"/result/{job_id}/face_{i}/visualization",
+            },
+        })
 
     return JSONResponse({
         "job_id": job_id,
-        "landmarks": landmarks,
-        "mesh_vertices": vertices,
-        "mesh_vertex_count": len(vertices) if vertices else 0,
-        "files": {
-            "visualization": f"/result/{job_id}/visualization",
-            "obj_pca_tex":    f"/result/{job_id}/obj_pca",
-            "obj_extract_tex": f"/result/{job_id}/obj_extract",
-            "npy":            f"/result/{job_id}/npy",
-            "zip":            f"/result/{job_id}/zip",
-        },
+        "face_count": len(faces),
+        "faces": faces,
     })
 
 
 @app.get("/result/{job_id}/visualization")
 async def get_vis(job_id: str):
     p = OUTPUT_ROOT / job_id / "result.png"
+    return FileResponse(p, media_type="image/png") if p.exists() else JSONResponse({"error": "not found"}, 404)
+
+
+@app.get("/result/{job_id}/face_{face_idx}/visualization")
+async def get_face_vis(job_id: str, face_idx: int):
+    p = OUTPUT_ROOT / job_id / f"face_{face_idx}" / "result.png"
     return FileResponse(p, media_type="image/png") if p.exists() else JSONResponse({"error": "not found"}, 404)
 
 
@@ -119,6 +136,17 @@ async def get_file(job_id: str, kind: str):
         "npy": "result.npy",
     }
     p = OUTPUT_ROOT / job_id / mapping.get(kind, "")
+    return FileResponse(p, media_type="application/octet-stream") if p.exists() else JSONResponse({"error": "not found"}, 404)
+
+
+@app.get("/result/{job_id}/face_{face_idx}/{kind}")
+async def get_face_file(job_id: str, face_idx: int, kind: str):
+    mapping = {
+        "obj_pca": "result_pcaTex.obj",
+        "obj_extract": "result_extractTex.obj",
+        "npy": "result.npy",
+    }
+    p = OUTPUT_ROOT / job_id / f"face_{face_idx}" / mapping.get(kind, "")
     return FileResponse(p, media_type="application/octet-stream") if p.exists() else JSONResponse({"error": "not found"}, 404)
 
 
